@@ -1,0 +1,77 @@
+name: JkFlow Build and Tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  launcher:
+    name: Build Launcher and Run Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            python3 \
+            python3-pip \
+            libfreetype-dev
+
+      - name: Check Python
+        run: python3 --version
+
+      - name: Build launcher assets and run tests
+        run: bash launcher/tests/run.sh
+
+      - name: Upload generated launcher assets
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jkflow-launcher-generated
+          path: |
+            launcher/build/gen/
+          if-no-files-found: warn
+          retention-days: 7
+
+  source-validation:
+    name: Validate Title and Source Scripts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Python
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3
+
+      - name: Validate Python source syntax
+        run: |
+          python3 -m compileall -q \
+            launcher/tools \
+            title
+
+      - name: Validate shell scripts
+        run: |
+          bash -n launcher/tests/run.sh
+          bash -n title/make_package_inputs.sh
+
+      - name: Test title post-link cleaner
+        run: |
+          python3 -I title/postlink_clean.py selftest
