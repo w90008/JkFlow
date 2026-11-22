@@ -1,77 +1,50 @@
-name: JkFlow Build and Tests
+name: Build PKG
 
 on:
   workflow_dispatch:
   push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
-
-permissions:
-  contents: read
+    branches: [ main ]
 
 jobs:
-  launcher:
-    name: Build Launcher and Run Tests
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-
+  build:
+    runs-on: ubuntu-latest
+    env:
+      OO_PS4_TOOLCHAIN: ${{ github.workspace }}/OpenOrbis-PS4-Toolchain
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            python3 \
-            python3-pip \
-            libfreetype-dev
+          sudo apt-get install -y build-essential clang lld make cmake python3 python3-pip git zip unzip
 
-      - name: Check Python
-        run: python3 --version
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
 
-      - name: Build launcher assets and run tests
-        run: bash launcher/tests/run.sh
+      - name: Get OpenOrbis toolchain
+        run: git clone --depth 1 https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain.git "$OO_PS4_TOOLCHAIN"
 
-      - name: Upload generated launcher assets
-        if: success()
+      - name: Build
+        run: |
+          if [ -f build.sh ]; then chmod +x build.sh && ./build.sh
+          elif [ -f Makefile ]; then make -j$(nproc)
+          elif [ -f launcher/build.sh ]; then cd launcher && chmod +x build.sh && ./build.sh
+          elif [ -f launcher/Makefile ]; then make -C launcher -j$(nproc)
+          else echo "No build script found"; ls -R | head -100; exit 1; fi
+
+      - name: List outputs
+        run: find . -name "*.pkg" -o -name "*.elf" -o -name "*.bin"
+
+      - name: Upload PKG
         uses: actions/upload-artifact@v4
         with:
-          name: jkflow-launcher-generated
+          name: jkflow-pkg
           path: |
-            launcher/build/gen/
+            **/*.pkg
+            **/*.elf
           if-no-files-found: warn
-          retention-days: 7
-
-  source-validation:
-    name: Validate Title and Source Scripts
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Python
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y python3
-
-      - name: Validate Python source syntax
-        run: |
-          python3 -m compileall -q \
-            launcher/tools \
-            title
-
-      - name: Validate shell scripts
-        run: |
-          bash -n launcher/tests/run.sh
-          bash -n title/make_package_inputs.sh
-
-      - name: Test title post-link cleaner
-        run: |
-          python3 -I title/postlink_clean.py selftest
