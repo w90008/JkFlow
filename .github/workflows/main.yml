@@ -31,21 +31,53 @@ jobs:
           echo "OO_PS4_TOOLCHAIN=$HOME/OpenOrbis-PS4-Toolchain" >> "$GITHUB_ENV"
 
       - name: Build
+        env:
+          CONTENT_ID: IV0000-BREW00000_00-JKFLOW0000000000
         run: |
-          if [ -f build.sh ]; then chmod +x build.sh && ./build.sh
-          elif [ -f Makefile ]; then make -j$(nproc)
-          elif [ -f launcher/build.sh ]; then cd launcher && chmod +x build.sh && ./build.sh
-          elif [ -f launcher/Makefile ]; then make -C launcher -j$(nproc)
-          else echo "No build script found"; ls -R | head -100; exit 1; fi
+          set -euo pipefail
+          TC="$OO_PS4_TOOLCHAIN"
+          ROOT="$(pwd)"
 
-      - name: List outputs
-        run: find "$GITHUB_WORKSPACE" \( -name "*.pkg" -o -name "*.elf" -o -name "*.bin" \)
+          LOADER="$(find . -name bl_loader.c -not -path './.git/*' | head -1)"
+          [ -n "$LOADER" ] || { echo "bl_loader.c not found"; exit 1; }
+          SRC_DIR="$(dirname "$LOADER")"
+          echo "Source dir: $SRC_DIR"
+
+          OUT="$ROOT/out"
+          rm -rf "$OUT"
+          mkdir -p "$OUT/obj" "$OUT/pkg"
+
+          CFLAGS="--target=x86_64-pc-freebsd12-elf -fPIC -funwind-tables -c -O2 -isysroot $TC -isystem $TC/include -I$SRC_DIR"
+          i=0
+          while IFS= read -r f; do
+            i=$((i+1))
+            echo "CC $f"
+            clang $CFLAGS "$f" -o "$OUT/obj/$i.o"
+          done < <(find "$SRC_DIR" -name '*.c')
+
+          ld.lld -m elf_x86_64 -pie --script "$TC/link.x" --eh-frame-hdr \
+            -L"$TC/lib" "$TC/lib/crt1.o" "$OUT"/obj/*.o -lc -lkernel \
+            -o "$OUT/eboot.elf"
+
+          SCE="$(find . -type d -name sce_sys -not -path './out/*' -not -path './.git/*' | head -1)"
+          [ -n "$SCE" ] || { echo "sce_sys folder not found (needs param.sfo and icon0.png)"; exit 1; }
+          cp -r "$SCE" "$OUT/pkg/sce_sys"
+
+          cd "$OUT"
+          "$TC/bin/linux/create-fself" -in=eboot.elf -out=eboot.oelf --eboot pkg/eboot.bin --paid 0x3800000000000011
+
+          cd "$OUT/pkg"
+          FILES="eboot.bin"
+          for f in $(find sce_sys -type f); do FILES="$FILES $f"; done
+          "$TC/bin/linux/create-gp4" -out pkg.gp4 --content-id="$CONTENT_ID" --files "$FILES"
+          "$TC/bin/linux/PkgTool.Core" pkg_build pkg.gp4 .
+
+          echo "=== Result ==="
+          find "$OUT" -name '*.pkg'
 
       - name: Upload PKG
         uses: actions/upload-artifact@v4
         with:
           name: jkflow-pkg
-          path: |
-            **/*.pkg
-            **/*.elf
+          path: out/pkg/*.pkg
           if-no-files-found: error
